@@ -2,8 +2,6 @@ package com.ki_connect.newsradar;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -18,8 +16,6 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-import com.google.firebase.FirebaseApp;
-import com.google.firebase.messaging.FirebaseMessaging;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
@@ -47,7 +43,9 @@ public final class MainActivity extends Activity {
     private boolean loading;
     private boolean home;
     private boolean demoVisible;
-    private boolean notifyAfterPermission;
+    private int permissionAction;
+    private static final int DEMO_PERMISSION = 1;
+    private static final int FEEDS_PERMISSION = 2;
 
     @Override
     public void onCreate(Bundle saved) {
@@ -75,13 +73,13 @@ public final class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
         state.putBoolean("demo", demoVisible);
-        state.putBoolean("notifyAfterPermission", notifyAfterPermission);
+        state.putInt("permissionAction", permissionAction);
     }
 
     @Override
     protected void onRestoreInstanceState(Bundle state) {
         super.onRestoreInstanceState(state);
-        notifyAfterPermission = state.getBoolean("notifyAfterPermission");
+        permissionAction = state.getInt("permissionAction");
     }
 
     @Override
@@ -104,7 +102,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showFromIntent(Intent intent) {
-        if (RadarMessagingService.OPEN_DEMO.equals(intent.getAction())) showDemo();
+        if (RadarNotifications.OPEN_DEMO.equals(intent.getAction())) showDemo();
         else showHome();
     }
 
@@ -115,13 +113,13 @@ public final class MainActivity extends Activity {
         List<CompletableFuture<List<RadarData.Article>>> tasks = new ArrayList<>();
         List<String> names = new ArrayList<>();
         try {
-            JSONArray sources = new JSONArray(RadarData.asset(this, "feeds.json"));
+            JSONArray sources = RadarData.feeds(this);
             for (int i = 0; i < sources.length(); i++) {
                 JSONObject source = sources.getJSONObject(i);
                 names.add(source.getString("name"));
                 tasks.add(CompletableFuture.supplyAsync(() -> {
                     try {
-                        return RadarData.readFeed(source);
+                        return RadarData.readFeed(source, null);
                     } catch (Exception failure) {
                         return null;
                     }
@@ -164,12 +162,15 @@ public final class MainActivity extends Activity {
         label(stage, "Drei fiktive Quellen, zwei Starttermine.", 16, MUTED, false);
         button(stage, "Quellenvergleich ansehen", this::showDemo, true);
         button(stage, "Testbenachrichtigung auslösen", this::requestDemoNotification, false);
-        button(stage, "Push-Einrichtung", this::showPushSettings, false);
+        button(stage, "Bühnensteuerung", this::showStageSettings, false);
 
         label(body, "LIVE  /  3 QUELLEN", 13, MINT, true);
         label(body, "Aktuelle Meldungen", 26, INK, true);
         label(body, "Tagesschau · Deutschlandfunk · heise online", 15, MUTED, false);
         button(body, loading ? "Feeds werden geladen …" : "Feeds aktualisieren", this::loadFeeds, false).setEnabled(!loading);
+        boolean alerts = FeedJob.isScheduled(this);
+        button(body, alerts ? "Feed-Hinweise ausschalten" : "Feed-Hinweise einschalten", this::toggleFeedAlerts, false);
+        if (alerts) label(body, "Android prüft die Feeds etwa alle 30 Minuten.", 14, MUTED, false);
         if (!missing.isEmpty()) label(body, "Nicht verfügbar: " + String.join(", ", missing), 15, AMBER, false);
         if (stories.isEmpty() && !loading) label(body, "Keine Meldungen geladen.", 16, MUTED, false);
         for (RadarData.Story story : stories) {
@@ -195,6 +196,9 @@ public final class MainActivity extends Activity {
             LinearLayout card = sourceCard(item.source(), item.title(), item.detail());
             Uri link = Uri.parse(item.link());
             if ("https".equalsIgnoreCase(link.getScheme()) && link.getHost() != null) {
+                if (RadarData.isSupportedArticle(link)) {
+                    button(card, "HTML auswerten", () -> showHtml(item, story), false);
+                }
                 button(card, "Original öffnen", () -> {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, link));
@@ -237,57 +241,83 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void showPushSettings() {
+    private void showHtml(RadarData.Article article, RadarData.Story story) {
+        begin(false, false);
+        button(body, "‹  Zurück zur Meldung", () -> showStory(story), false);
+        label(body, "HTML / " + article.source(), 13, MINT, true);
+        label(body, article.title(), 29, INK, true);
+        LinearLayout content = panel(body);
+        label(content, "Webseite wird ausgewertet …", 16, MUTED, false);
+        CompletableFuture.supplyAsync(() -> RadarData.readPage(article.link()), feeds).thenAccept(page ->
+            runOnUiThread(() -> {
+                if (isDestroyed() || content.getParent() != body) return;
+                content.removeAllViews();
+                if (page == null) {
+                    label(content, "Die Seite lieferte keine auswertbare Beschreibung.", 16, AMBER, false);
+                    return;
+                }
+                label(content, "VON DER WEBSEITE", 13, MINT, true);
+                label(content, page.title(), 21, INK, true);
+                label(content, page.detail(), 16, MUTED, false);
+            }));
+    }
+
+    private void showStageSettings() {
         begin(false, false);
         backButton();
-        label(body, "PUSH / EINRICHTUNG", 13, MINT, true);
+        label(body, "DEMO / LAPTOP + ANDROID", 13, MINT, true);
         label(body, "Bühnensteuerung", 33, INK, true);
-        label(body, "USB-Demo: Android mit dem Laptop verbinden, USB-Debugging bestätigen und das Demo-Dashboard öffnen.", 17, INK, false);
+        label(body, "Android per USB mit dem Laptop verbinden, USB-Debugging bestätigen und das lokale Demo-Dashboard öffnen.", 17, INK, false);
         button(body, "Benachrichtigungen testen", this::requestDemoNotification, true);
-        if (FirebaseApp.getApps(this).isEmpty()) {
-            label(body, "Firebase ist in dieser APK noch nicht eingerichtet. Die USB-Demo ist verfügbar.",
-                    17, MUTED, false);
-            return;
-        }
-        label(body, "Für Internet-Push den Gerätetoken kopieren und im lokalen Dashboard einfügen.", 17, MUTED, false);
-        button(body, "Firebase-Gerätetoken kopieren", () -> FirebaseMessaging.getInstance().getToken()
-                .addOnCompleteListener(this, task -> {
-                    if (!task.isSuccessful()) {
-                        toast("Gerätetoken konnte nicht geladen werden.");
-                        return;
-                    }
-                    ClipData clip = ClipData.newPlainText("NewsRadar Firebase-Gerätetoken", task.getResult());
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        android.os.PersistableBundle extras = new android.os.PersistableBundle();
-                        extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
-                        clip.getDescription().setExtras(extras);
-                    }
-                    getSystemService(ClipboardManager.class).setPrimaryClip(clip);
-                    toast("Gerätetoken kopiert.");
-                }), false);
     }
 
     private void requestDemoNotification() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            notifyAfterPermission = true;
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION);
-        } else {
-            postNotification();
+        if (allowNotifications(DEMO_PERMISSION)) postNotification();
+    }
+
+    private void toggleFeedAlerts() {
+        if (FeedJob.isScheduled(this)) {
+            FeedJob.cancel(this);
+            showHome();
+        } else if (allowNotifications(FEEDS_PERMISSION)) {
+            enableFeedAlerts();
         }
+    }
+
+    private void enableFeedAlerts() {
+        if (!getSystemService(android.app.NotificationManager.class).areNotificationsEnabled()) {
+            toast("Bitte Benachrichtigungen in den Android-Einstellungen erlauben.");
+            return;
+        }
+        if (!FeedJob.schedule(this)) toast("Feed-Hinweise konnten nicht aktiviert werden.");
+        showHome();
+    }
+
+    private boolean allowNotifications(int action) {
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) return true;
+        permissionAction = action;
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION);
+        return false;
     }
 
     @Override
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
-        if (request != PERMISSION || !notifyAfterPermission) return;
-        notifyAfterPermission = false;
-        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) postNotification();
-        else toast("Bitte Benachrichtigungen in den Android-Einstellungen erlauben.");
+        if (request != PERMISSION) return;
+        int action = permissionAction;
+        permissionAction = 0;
+        if (results.length == 0 || results[0] != PackageManager.PERMISSION_GRANTED) {
+            toast("Bitte Benachrichtigungen in den Android-Einstellungen erlauben.");
+        } else if (action == DEMO_PERMISSION) {
+            postNotification();
+        } else if (action == FEEDS_PERMISSION) {
+            enableFeedAlerts();
+        }
     }
 
     private void postNotification() {
-        if (RadarMessagingService.showDemo(this)) toast("Testbenachrichtigung ausgelöst.");
+        if (RadarNotifications.showDemo(this)) toast("Testbenachrichtigung ausgelöst.");
         else toast("Bitte Benachrichtigungen in den Android-Einstellungen erlauben.");
     }
 

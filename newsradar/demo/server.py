@@ -1,10 +1,9 @@
 """Local stage dashboard for the NewsRadar debug APK."""
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs
 from html import escape
 import argparse
 import os
-import re
 import secrets
 import subprocess
 
@@ -32,36 +31,6 @@ def send_usb():
     raise ValueError("NewsRadar hat nicht geantwortet. Debug-APK installieren und einmal öffnen.")
 
 
-def send_firebase(token):
-    if not re.fullmatch(r"[A-Za-z0-9_:\-]{20,2048}", token):
-        raise ValueError("Bitte den Firebase-Gerätetoken aus NewsRadar einfügen.")
-    project = os.environ.get("NEWSRADAR_FIREBASE_PROJECT")
-    if not project:
-        raise ValueError("NEWSRADAR_FIREBASE_PROJECT fehlt. Die Firebase-Einrichtung steht in der README.")
-    try:
-        import google.auth
-        from google.auth.transport.requests import AuthorizedSession
-    except ImportError as error:
-        raise ValueError("Für Internet-Push zuerst demo/requirements.txt installieren.") from error
-    try:
-        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/firebase.messaging"])
-        with AuthorizedSession(credentials) as session:
-            response = session.post(
-                f"https://fcm.googleapis.com/v1/projects/{quote(project, safe='')}/messages:send",
-                json={"message": {
-                    "token": token,
-                    "data": {"action": "demo"},
-                    "android": {"priority": "HIGH", "ttl": "120s"},
-                }},
-                timeout=12,
-            )
-    except Exception as error:
-        raise ValueError("Firebase-Verbindung oder Zugangsdaten prüfen.") from error
-    if not response.ok:
-        raise ValueError(f"Firebase hat den Versand abgelehnt (HTTP {response.status_code}). Projekt und Token prüfen.")
-    return "Firebase hat den Push angenommen. Die Zustellung auf dem Handy prüfen."
-
-
 def page(status=""):
     return f"""<!doctype html>
 <html lang="de">
@@ -75,9 +44,8 @@ def page(status=""):
   header strong {{ color:#73edc9; letter-spacing:.12em; }}
   p {{ color:#b6cbd7; }}
   section {{ background:#152735; padding:1.2rem; margin:1rem 0; border-radius:1rem; }}
-  button, input {{ font:inherit; padding:.7rem; border-radius:.5rem; }}
+  button {{ font:inherit; padding:.7rem; border-radius:.5rem; }}
   button {{ color:#0b1520; background:#73edc9; border:0; font-weight:700; cursor:pointer; }}
-  input {{ display:block; margin:.5rem 0 .8rem; width:min(100%,28rem); box-sizing:border-box; }}
   output {{ display:block; color:#ffcc78; }}
 </style>
 <main>
@@ -90,16 +58,6 @@ def page(status=""):
   <form method="post" action="/demo/usb">
     <input type="hidden" name="csrf" value="{CSRF}">
     <button type="submit">Demo über USB starten</button>
-  </form>
-</section>
-<section>
-  <h2>Internet-Push</h2>
-  <p>Benötigt eine mit Firebase konfigurierte APK und Zugangsdaten am Laptop.</p>
-  <form method="post" action="/demo/firebase" autocomplete="off">
-    <input type="hidden" name="csrf" value="{CSRF}">
-    <label for="token">Firebase-Gerätetoken</label>
-    <input id="token" name="token" type="password" maxlength="2048" required>
-    <button type="submit">Demo über Firebase starten</button>
   </form>
 </section>
 </main>
@@ -126,7 +84,7 @@ class Dashboard(BaseHTTPRequestHandler):
         self.respond()
 
     def do_POST(self):
-        if not self.valid_host() or self.path not in {"/demo/usb", "/demo/firebase"}:
+        if not self.valid_host() or self.path != "/demo/usb":
             self.send_error(404)
             return
         try:
@@ -142,7 +100,7 @@ class Dashboard(BaseHTTPRequestHandler):
             self.send_error(403)
             return
         try:
-            result = send_usb() if self.path.endswith("/usb") else send_firebase(fields.get("token", [""])[0].strip())
+            result = send_usb()
             self.respond(message=result)
         except ValueError as error:
             self.respond(422, str(error))

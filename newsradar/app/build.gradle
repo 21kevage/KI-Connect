@@ -1,15 +1,11 @@
 plugins {
     id 'com.android.application' version '8.7.3'
-    id 'com.google.gms.google-services' version '4.4.2' apply false
-}
-
-if (file('google-services.json').exists()) {
-    apply plugin: 'com.google.gms.google-services'
 }
 
 android {
     namespace 'com.ki_connect.newsradar'
     compileSdk 35
+    buildToolsVersion '35.0.0'
 
     defaultConfig {
         applicationId 'com.ki_connect.newsradar'
@@ -30,5 +26,5 @@ android {
 }
 
 dependencies {
-    implementation 'com.google.firebase:firebase-messaging:24.1.2'
+    implementation 'org.jsoup:jsoup:1.21.2'
 }

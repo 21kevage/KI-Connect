@@ -1,10 +1,15 @@
 package com.ki_connect.newsradar;
 
 import android.content.Context;
+import android.net.Network;
+import android.net.Uri;
 import android.text.Html;
 import android.util.Xml;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.xmlpull.v1.XmlPullParser;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -19,7 +24,13 @@ import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 
 final class RadarData {
-    record Article(String source, String title, String detail, String link) {}
+    record Article(String source, String title, String detail, String link) {
+        String key() {
+            return link.isEmpty() ? title : link;
+        }
+    }
+
+    record Page(String title, String detail) {}
 
     static final class Story {
         final List<Article> articles = new ArrayList<>();
@@ -48,9 +59,14 @@ final class RadarData {
         return new JSONObject(asset(context, "demo.json"));
     }
 
-    static List<Article> readFeed(JSONObject feed) throws Exception {
+    static JSONArray feeds(Context context) throws Exception {
+        return new JSONArray(asset(context, "feeds.json"));
+    }
+
+    static List<Article> readFeed(JSONObject feed, Network network) throws Exception {
         URL url = new URL(feed.getString("url"));
-        HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+        HttpsURLConnection connection = (HttpsURLConnection) (network == null
+                ? url.openConnection() : network.openConnection(url));
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(5000);
@@ -116,6 +132,40 @@ final class RadarData {
 
     private static String plain(String text) {
         return Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY).toString().replaceAll("\\s+", " ").trim();
+    }
+
+    static boolean isSupportedArticle(Uri link) {
+        String host = link.getHost();
+        if (!"https".equalsIgnoreCase(link.getScheme()) || host == null || link.getUserInfo() != null
+                || (link.getPort() != -1 && link.getPort() != 443)) return false;
+        return "www.tagesschau.de".equalsIgnoreCase(host)
+                || "www.deutschlandfunk.de".equalsIgnoreCase(host)
+                || "www.heise.de".equalsIgnoreCase(host);
+    }
+
+    static Page readPage(String link) {
+        if (!isSupportedArticle(Uri.parse(link))) return null;
+        try {
+            Document html = Jsoup.connect(link).userAgent("NewsRadar/0.1 (article reader)")
+                    .followRedirects(false).timeout(7000).maxBodySize(512 * 1024).get();
+            String title = html.select("meta[property=og:title]").attr("content").trim();
+            if (title.isEmpty()) title = html.title();
+            String detail = html.select("meta[property=og:description]").attr("content").trim();
+            if (detail.isEmpty()) detail = html.select("meta[name=description]").attr("content").trim();
+            if (detail.isEmpty()) {
+                for (Element paragraph : html.select("article p, main p")) {
+                    if (paragraph.text().length() >= 80) {
+                        detail = paragraph.text();
+                        break;
+                    }
+                }
+            }
+            if (detail.isEmpty()) return null;
+            if (detail.length() > 480) detail = detail.substring(0, 480).trim() + "…";
+            return new Page(title, detail);
+        } catch (Exception failure) {
+            return null;
+        }
     }
 
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");

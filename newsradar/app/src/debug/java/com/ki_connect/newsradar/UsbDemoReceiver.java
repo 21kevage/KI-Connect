@@ -8,7 +8,7 @@ public final class UsbDemoReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if ("com.ki_connect.newsradar.USB_DEMO".equals(intent.getAction())) {
-            setResultCode(RadarMessagingService.showDemo(context) ? 1 : 2);
+            setResultCode(RadarNotifications.showDemo(context) ? 1 : 2);
         }
     }
 }
