@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name=".UsbDemoReceiver" android:exported="true" android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.ki_connect.newsradar.USB_DEMO" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
